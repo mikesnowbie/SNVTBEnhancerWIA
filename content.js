@@ -312,6 +312,15 @@
       srSpan.className = 'sr-only vtb-enhancer-update-indicator-text';
       srSpan.textContent = state.srMessage;
 
+      const visibleSpan = Array.from(timeElement.children).find(
+        (child) =>
+          child.nodeType === Node.ELEMENT_NODE &&
+          child.tagName === 'SPAN' &&
+          !child.classList.contains('sr-only') &&
+          !child.classList.contains('vtb-enhancer-update-indicator') &&
+          !child.classList.contains('vtb-enhancer-update-indicator-text')
+      );
+
       const srOnlyReference = Array.from(timeElement.children).find(
         (child) =>
           child.classList &&
@@ -319,50 +328,131 @@
           !child.classList.contains('vtb-enhancer-update-indicator-text')
       );
 
-      if (srOnlyReference) {
-        srOnlyReference.before(indicatorSpan);
+      if (visibleSpan && typeof visibleSpan.after === 'function') {
+        visibleSpan.after(indicatorSpan);
+      } else if (srOnlyReference && srOnlyReference.parentNode) {
+        srOnlyReference.parentNode.insertBefore(
+          indicatorSpan,
+          srOnlyReference
+        );
       } else {
         timeElement.appendChild(indicatorSpan);
       }
 
-      indicatorSpan.after(srSpan);
+      if (srOnlyReference && srOnlyReference.parentNode) {
+        srOnlyReference.parentNode.insertBefore(srSpan, srOnlyReference);
+      } else {
+        indicatorSpan.after(srSpan);
+      }
     }
 
-    function ensureUpdateIndicator(timeElement) {
-      applyUpdateIndicator(timeElement);
+    function detachTimeObserver(timeElement) {
+      if (
+        timeElement &&
+        timeElement._vtbEnhancerUpdateObserver &&
+        typeof timeElement._vtbEnhancerUpdateObserver.disconnect === 'function'
+      ) {
+        timeElement._vtbEnhancerUpdateObserver.disconnect();
+        delete timeElement._vtbEnhancerUpdateObserver;
+      }
+    }
 
-      if (timeElement._vtbEnhancerUpdateObserver) return;
+    function ensureUpdateIndicator(snTimeAgoElement) {
+      if (!snTimeAgoElement) return;
 
-      const observer = new MutationObserver(() => {
-        if (!timeElement.isConnected) {
-          observer.disconnect();
-          delete timeElement._vtbEnhancerUpdateObserver;
+      const applyForTimeElement = (timeElement) => {
+        if (!timeElement) return;
+        applyUpdateIndicator(timeElement);
+
+        if (timeElement._vtbEnhancerUpdateObserver) return;
+
+        const observer = new MutationObserver(() => {
+          if (!timeElement.isConnected) {
+            observer.disconnect();
+            delete timeElement._vtbEnhancerUpdateObserver;
+            return;
+          }
+          applyUpdateIndicator(timeElement);
+        });
+
+        observer.observe(timeElement, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-original-title'],
+        });
+
+        timeElement._vtbEnhancerUpdateObserver = observer;
+      };
+
+      const trackTimeElement = () => {
+        const timeElement = snTimeAgoElement.querySelector(
+          'time[data-original-title]'
+        );
+
+        if (!timeElement) {
+          if (snTimeAgoElement._vtbEnhancerTrackedTime) {
+            detachTimeObserver(snTimeAgoElement._vtbEnhancerTrackedTime);
+            delete snTimeAgoElement._vtbEnhancerTrackedTime;
+          }
           return;
         }
-        applyUpdateIndicator(timeElement);
+
+        if (snTimeAgoElement._vtbEnhancerTrackedTime === timeElement) {
+          applyUpdateIndicator(timeElement);
+          return;
+        }
+
+        detachTimeObserver(snTimeAgoElement._vtbEnhancerTrackedTime);
+        snTimeAgoElement._vtbEnhancerTrackedTime = timeElement;
+        applyForTimeElement(timeElement);
+      };
+
+      trackTimeElement();
+
+      if (snTimeAgoElement._vtbEnhancerContainerObserver) return;
+
+      const containerObserver = new MutationObserver((mutations) => {
+        if (!snTimeAgoElement.isConnected) {
+          detachTimeObserver(snTimeAgoElement._vtbEnhancerTrackedTime);
+          containerObserver.disconnect();
+          delete snTimeAgoElement._vtbEnhancerTrackedTime;
+          delete snTimeAgoElement._vtbEnhancerContainerObserver;
+          return;
+        }
+
+        let shouldRetrack = false;
+        for (const mutation of mutations) {
+          if (mutation.type === 'childList' || mutation.type === 'attributes') {
+            shouldRetrack = true;
+            break;
+          }
+        }
+
+        if (shouldRetrack) {
+          trackTimeElement();
+        }
       });
 
-      observer.observe(timeElement, {
+      containerObserver.observe(snTimeAgoElement, {
         childList: true,
-        characterData: true,
         subtree: true,
-        attributes: true,
-        attributeFilter: ['data-original-title'],
       });
 
-      timeElement._vtbEnhancerUpdateObserver = observer;
+      snTimeAgoElement._vtbEnhancerContainerObserver = containerObserver;
     }
 
     function annotateLastUpdated(card) {
-      let timeElement = card.querySelector(
-        'sn-time-ago[timestamp="sysUpdatedOn"] time[data-original-title]'
+      let timeAgoElement = card.querySelector(
+        'sn-time-ago[timestamp="sysUpdatedOn"]'
       );
-      if (!timeElement) {
-        timeElement = card.querySelector('sn-time-ago time[data-original-title]');
+      if (!timeAgoElement) {
+        timeAgoElement = card.querySelector('sn-time-ago');
       }
-      if (!timeElement) return;
+      if (!timeAgoElement) return;
 
-      ensureUpdateIndicator(timeElement);
+      ensureUpdateIndicator(timeAgoElement);
     }
 
     function normalizeDateLabel(text) {
