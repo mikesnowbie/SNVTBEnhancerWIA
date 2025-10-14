@@ -221,6 +221,138 @@
       return isNaN(parsedDate) ? null : parsedDate;
     }
 
+    function removeExistingUpdateIndicator(timeElement) {
+      const existingIndicator = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator'
+      );
+      if (existingIndicator) existingIndicator.remove();
+
+      const existingSrText = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator-text'
+      );
+      if (existingSrText) existingSrText.remove();
+    }
+
+    function getIndicatorEmojis() {
+      const indicator = config.updateIndicator || DEFAULT_UPDATE_INDICATOR;
+      const freshEmoji =
+        indicator && typeof indicator.freshEmoji === 'string' && indicator.freshEmoji
+          ? indicator.freshEmoji
+          : DEFAULT_UPDATE_INDICATOR.freshEmoji;
+      const staleEmoji =
+        indicator && typeof indicator.staleEmoji === 'string' && indicator.staleEmoji
+          ? indicator.staleEmoji
+          : DEFAULT_UPDATE_INDICATOR.staleEmoji;
+      return { freshEmoji, staleEmoji };
+    }
+
+    function computeUpdateIndicatorState(timeElement) {
+      const originalTitle = timeElement.getAttribute('data-original-title');
+      const lastUpdated = parseServiceNowDateTime(originalTitle);
+      if (!lastUpdated) return null;
+
+      let elapsedMs = Date.now() - lastUpdated.getTime();
+      if (!Number.isFinite(elapsedMs)) return null;
+      if (elapsedMs < 0) elapsedMs = 0;
+
+      const daysSinceUpdate = elapsedMs / MS_PER_DAY;
+      const threshold =
+        typeof config.updateThresholdDays === 'number'
+          ? config.updateThresholdDays
+          : DEFAULT_UPDATE_THRESHOLD_DAYS;
+      const { freshEmoji, staleEmoji } = getIndicatorEmojis();
+      const isStale = daysSinceUpdate > threshold;
+      const emoji = isStale ? staleEmoji : freshEmoji;
+      const srMessage = isStale
+        ? `Card has not been updated within the configured threshold (${staleEmoji}).`
+        : `Card updated within the configured threshold (${freshEmoji}).`;
+
+      return {
+        emoji,
+        srMessage,
+        isStale,
+        threshold,
+      };
+    }
+
+    function applyUpdateIndicator(timeElement) {
+      const state = computeUpdateIndicatorState(timeElement);
+      const existingIndicator = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator'
+      );
+      const existingSrText = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator-text'
+      );
+
+      if (!state) {
+        if (existingIndicator || existingSrText) {
+          removeExistingUpdateIndicator(timeElement);
+        }
+        return;
+      }
+
+      if (
+        existingIndicator &&
+        existingIndicator.textContent === state.emoji &&
+        existingSrText &&
+        existingSrText.textContent === state.srMessage
+      ) {
+        return;
+      }
+
+      removeExistingUpdateIndicator(timeElement);
+
+      const indicatorSpan = document.createElement('span');
+      indicatorSpan.className = 'vtb-enhancer-update-indicator';
+      indicatorSpan.setAttribute('aria-hidden', 'true');
+      indicatorSpan.style.marginLeft = '4px';
+      indicatorSpan.textContent = state.emoji;
+
+      const srSpan = document.createElement('span');
+      srSpan.className = 'sr-only vtb-enhancer-update-indicator-text';
+      srSpan.textContent = state.srMessage;
+
+      const srOnlyReference = Array.from(timeElement.children).find(
+        (child) =>
+          child.classList &&
+          child.classList.contains('sr-only') &&
+          !child.classList.contains('vtb-enhancer-update-indicator-text')
+      );
+
+      if (srOnlyReference) {
+        srOnlyReference.before(indicatorSpan);
+      } else {
+        timeElement.appendChild(indicatorSpan);
+      }
+
+      indicatorSpan.after(srSpan);
+    }
+
+    function ensureUpdateIndicator(timeElement) {
+      applyUpdateIndicator(timeElement);
+
+      if (timeElement._vtbEnhancerUpdateObserver) return;
+
+      const observer = new MutationObserver(() => {
+        if (!timeElement.isConnected) {
+          observer.disconnect();
+          delete timeElement._vtbEnhancerUpdateObserver;
+          return;
+        }
+        applyUpdateIndicator(timeElement);
+      });
+
+      observer.observe(timeElement, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-original-title'],
+      });
+
+      timeElement._vtbEnhancerUpdateObserver = observer;
+    }
+
     function annotateLastUpdated(card) {
       let timeElement = card.querySelector(
         'sn-time-ago[timestamp="sysUpdatedOn"] time[data-original-title]'
@@ -230,39 +362,7 @@
       }
       if (!timeElement) return;
 
-      if (timeElement.querySelector('.vtb-enhancer-update-indicator')) return;
-
-      const originalTitle = timeElement.getAttribute('data-original-title');
-      const lastUpdated = parseServiceNowDateTime(originalTitle);
-      if (!lastUpdated) return;
-
-      let elapsedMs = Date.now() - lastUpdated.getTime();
-      if (!Number.isFinite(elapsedMs)) return;
-      if (elapsedMs < 0) elapsedMs = 0;
-
-      const daysSinceUpdate = elapsedMs / MS_PER_DAY;
-      const threshold =
-        typeof config.updateThresholdDays === 'number'
-          ? config.updateThresholdDays
-          : DEFAULT_UPDATE_THRESHOLD_DAYS;
-      const isStale = daysSinceUpdate > threshold;
-      const indicatorSpan = document.createElement('span');
-      indicatorSpan.className = 'vtb-enhancer-update-indicator';
-      indicatorSpan.setAttribute('aria-hidden', 'true');
-      indicatorSpan.style.marginLeft = '4px';
-      const indicator = config.updateIndicator || DEFAULT_UPDATE_INDICATOR;
-      const freshEmoji = indicator.freshEmoji || DEFAULT_UPDATE_INDICATOR.freshEmoji;
-      const staleEmoji = indicator.staleEmoji || DEFAULT_UPDATE_INDICATOR.staleEmoji;
-      indicatorSpan.textContent = isStale ? staleEmoji : freshEmoji;
-
-      const srSpan = document.createElement('span');
-      srSpan.className = 'sr-only vtb-enhancer-update-indicator-text';
-      srSpan.textContent = isStale
-        ? `Card has not been updated within the configured threshold (${staleEmoji}).`
-        : `Card updated within the configured threshold (${freshEmoji}).`;
-
-      timeElement.appendChild(indicatorSpan);
-      timeElement.appendChild(srSpan);
+      ensureUpdateIndicator(timeElement);
     }
 
     function normalizeDateLabel(text) {
