@@ -10,6 +10,12 @@
 (function () {
   if (!window.location.href.includes('vtb.do')) return;
 
+  const DEFAULT_UPDATE_THRESHOLD_DAYS = 6;
+  const DEFAULT_UPDATE_INDICATOR = {
+    freshEmoji: '✅',
+    staleEmoji: '❌',
+  };
+
   const defaultConfig = {
     ageBands: [
       { maxDays: 7, color: '#f9e79f' },
@@ -17,6 +23,8 @@
       { maxDays: 90, color: '#e67e22' },
       { maxDays: 9999, color: '#d9534f' },
     ],
+    updateThresholdDays: DEFAULT_UPDATE_THRESHOLD_DAYS,
+    updateIndicator: { ...DEFAULT_UPDATE_INDICATOR },
   };
 
   const defaultStorage = { defaultConfig: defaultConfig, boards: {} };
@@ -37,6 +45,62 @@
           if (cfg && cfg.ageBands) {
             cfg = { defaultConfig: cfg, boards: {} };
           }
+
+          if (
+            typeof cfg.defaultConfig.updateThresholdDays !== 'number' ||
+            cfg.defaultConfig.updateThresholdDays < 0
+          ) {
+            cfg.defaultConfig.updateThresholdDays = DEFAULT_UPDATE_THRESHOLD_DAYS;
+          }
+
+          if (
+            !cfg.defaultConfig.updateIndicator ||
+            typeof cfg.defaultConfig.updateIndicator !== 'object'
+          ) {
+            cfg.defaultConfig.updateIndicator = { ...DEFAULT_UPDATE_INDICATOR };
+          } else {
+            cfg.defaultConfig.updateIndicator = {
+              freshEmoji:
+                typeof cfg.defaultConfig.updateIndicator.freshEmoji === 'string' &&
+                cfg.defaultConfig.updateIndicator.freshEmoji.trim()
+                  ? cfg.defaultConfig.updateIndicator.freshEmoji
+                  : DEFAULT_UPDATE_INDICATOR.freshEmoji,
+              staleEmoji:
+                typeof cfg.defaultConfig.updateIndicator.staleEmoji === 'string' &&
+                cfg.defaultConfig.updateIndicator.staleEmoji.trim()
+                  ? cfg.defaultConfig.updateIndicator.staleEmoji
+                  : DEFAULT_UPDATE_INDICATOR.staleEmoji,
+            };
+          }
+
+          if (!cfg.boards || typeof cfg.boards !== 'object') {
+            cfg.boards = {};
+          }
+
+          Object.keys(cfg.boards).forEach((key) => {
+            const boardCfg = cfg.boards[key];
+            if (!boardCfg || typeof boardCfg !== 'object') return;
+            if (typeof boardCfg.updateThresholdDays !== 'number') {
+              boardCfg.updateThresholdDays = cfg.defaultConfig.updateThresholdDays;
+            }
+
+            if (!boardCfg.updateIndicator || typeof boardCfg.updateIndicator !== 'object') {
+              boardCfg.updateIndicator = { ...cfg.defaultConfig.updateIndicator };
+            } else {
+              boardCfg.updateIndicator = {
+                freshEmoji:
+                  typeof boardCfg.updateIndicator.freshEmoji === 'string' &&
+                  boardCfg.updateIndicator.freshEmoji.trim()
+                    ? boardCfg.updateIndicator.freshEmoji
+                    : cfg.defaultConfig.updateIndicator.freshEmoji,
+                staleEmoji:
+                  typeof boardCfg.updateIndicator.staleEmoji === 'string' &&
+                  boardCfg.updateIndicator.staleEmoji.trim()
+                    ? boardCfg.updateIndicator.staleEmoji
+                    : cfg.defaultConfig.updateIndicator.staleEmoji,
+              };
+            }
+          });
           callback(cfg);
         }
       );
@@ -78,10 +142,35 @@
 
   // Load config then run the main logic.
   getConfig(function (fullConfig) {
-    const config =
-      boardId && fullConfig.boards[boardId] && fullConfig.boards[boardId].ageBands
-        ? fullConfig.boards[boardId]
-        : fullConfig.defaultConfig;
+    const boardConfig = boardId ? fullConfig.boards[boardId] : null;
+    const boardIndicator =
+      (boardConfig && boardConfig.updateIndicator) ||
+      fullConfig.defaultConfig.updateIndicator ||
+      DEFAULT_UPDATE_INDICATOR;
+    const normalizedIndicator = {
+      freshEmoji:
+        typeof boardIndicator.freshEmoji === 'string' &&
+        boardIndicator.freshEmoji.trim()
+          ? boardIndicator.freshEmoji
+          : DEFAULT_UPDATE_INDICATOR.freshEmoji,
+      staleEmoji:
+        typeof boardIndicator.staleEmoji === 'string' &&
+        boardIndicator.staleEmoji.trim()
+          ? boardIndicator.staleEmoji
+          : DEFAULT_UPDATE_INDICATOR.staleEmoji,
+    };
+
+    const config = {
+      ageBands:
+        boardConfig && boardConfig.ageBands
+          ? boardConfig.ageBands
+          : fullConfig.defaultConfig.ageBands,
+      updateThresholdDays:
+        boardConfig && typeof boardConfig.updateThresholdDays === 'number'
+          ? boardConfig.updateThresholdDays
+          : fullConfig.defaultConfig.updateThresholdDays || DEFAULT_UPDATE_THRESHOLD_DAYS,
+      updateIndicator: normalizedIndicator,
+    };
     // --- Utility Functions ---
     function showDebugMessage(msg) {
       const div = document.createElement('div');
@@ -101,10 +190,79 @@
       setTimeout(() => div.remove(), 3000);
     }
 
+    const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
     function calculateDaysDiff(dateStr) {
       const d = new Date(dateStr);
       if (isNaN(d)) return null;
-      return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+      return Math.floor((Date.now() - d.getTime()) / MS_PER_DAY);
+    }
+
+    function parseServiceNowDateTime(dateStr) {
+      if (!dateStr || typeof dateStr !== 'string') return null;
+      const match = dateStr.trim().match(
+        /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/
+      );
+      if (!match) {
+        const fallback = new Date(dateStr);
+        return isNaN(fallback) ? null : fallback;
+      }
+      const [, year, month, day, hour, minute, second] = match.map((v, idx) =>
+        idx === 0 ? v : parseInt(v, 10)
+      );
+      const parsedDate = new Date(
+        year,
+        month - 1,
+        day,
+        hour,
+        minute,
+        second
+      );
+      return isNaN(parsedDate) ? null : parsedDate;
+    }
+
+    function annotateLastUpdated(card) {
+      let timeElement = card.querySelector(
+        'sn-time-ago[timestamp="sysUpdatedOn"] time[data-original-title]'
+      );
+      if (!timeElement) {
+        timeElement = card.querySelector('sn-time-ago time[data-original-title]');
+      }
+      if (!timeElement) return;
+
+      if (timeElement.querySelector('.vtb-enhancer-update-indicator')) return;
+
+      const originalTitle = timeElement.getAttribute('data-original-title');
+      const lastUpdated = parseServiceNowDateTime(originalTitle);
+      if (!lastUpdated) return;
+
+      let elapsedMs = Date.now() - lastUpdated.getTime();
+      if (!Number.isFinite(elapsedMs)) return;
+      if (elapsedMs < 0) elapsedMs = 0;
+
+      const daysSinceUpdate = elapsedMs / MS_PER_DAY;
+      const threshold =
+        typeof config.updateThresholdDays === 'number'
+          ? config.updateThresholdDays
+          : DEFAULT_UPDATE_THRESHOLD_DAYS;
+      const isStale = daysSinceUpdate > threshold;
+      const indicatorSpan = document.createElement('span');
+      indicatorSpan.className = 'vtb-enhancer-update-indicator';
+      indicatorSpan.setAttribute('aria-hidden', 'true');
+      indicatorSpan.style.marginLeft = '4px';
+      const indicator = config.updateIndicator || DEFAULT_UPDATE_INDICATOR;
+      const freshEmoji = indicator.freshEmoji || DEFAULT_UPDATE_INDICATOR.freshEmoji;
+      const staleEmoji = indicator.staleEmoji || DEFAULT_UPDATE_INDICATOR.staleEmoji;
+      indicatorSpan.textContent = isStale ? staleEmoji : freshEmoji;
+
+      const srSpan = document.createElement('span');
+      srSpan.className = 'sr-only vtb-enhancer-update-indicator-text';
+      srSpan.textContent = isStale
+        ? `Card has not been updated within the configured threshold (${staleEmoji}).`
+        : `Card updated within the configured threshold (${freshEmoji}).`;
+
+      timeElement.appendChild(indicatorSpan);
+      timeElement.appendChild(srSpan);
     }
 
     function normalizeDateLabel(text) {
@@ -233,6 +391,7 @@
     function processCard(card) {
       if (card.hasAttribute('data-task-age-enhanced')) return;
       try {
+        annotateLastUpdated(card);
         const state = findState(card);
         if (state) {
           if (isCompletionState(state)) {
