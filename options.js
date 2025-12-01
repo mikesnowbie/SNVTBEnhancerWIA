@@ -1,4 +1,10 @@
 document.addEventListener('DOMContentLoaded', function () {
+  const DEFAULT_UPDATE_THRESHOLD_DAYS = 6;
+  const DEFAULT_UPDATE_INDICATOR = {
+    freshEmoji: '✅',
+    staleEmoji: '❌',
+  };
+
   const defaultConfig = {
     ageBands: [
       { maxDays: 7, color: '#f9e79f' },
@@ -6,6 +12,8 @@ document.addEventListener('DOMContentLoaded', function () {
       { maxDays: 90, color: '#e67e22' },
       { maxDays: 9999, color: '#d9534f' },
     ],
+    updateThresholdDays: DEFAULT_UPDATE_THRESHOLD_DAYS,
+    updateIndicator: { ...DEFAULT_UPDATE_INDICATOR },
   };
 
   const defaultStorage = { defaultConfig: defaultConfig, boards: {} };
@@ -13,6 +21,9 @@ document.addEventListener('DOMContentLoaded', function () {
   const statusDiv = document.getElementById('status');
   const tableBody = document.querySelector('#ageBandsTable tbody');
   const boardSelect = document.getElementById('boardSelect');
+  const thresholdInput = document.getElementById('thresholdInput');
+  const freshEmojiInput = document.getElementById('freshEmojiInput');
+  const staleEmojiInput = document.getElementById('staleEmojiInput');
 
   let fullConfig = null;
   let currentBoardId = null; // null means default config
@@ -32,11 +43,11 @@ document.addEventListener('DOMContentLoaded', function () {
           if (cfg && cfg.ageBands) {
             cfg = { defaultConfig: cfg, boards: {} };
           }
-          callback(cfg);
+          callback(normalizeConfigStructure(cfg));
         }
       );
     } else {
-      callback(defaultStorage);
+      callback(normalizeConfigStructure(defaultStorage));
     }
   }
 
@@ -55,9 +66,89 @@ document.addEventListener('DOMContentLoaded', function () {
       if (callback) callback();
     }
   }
-  
-  // Render the table based directly on a provided configuration object.
-  function renderTableFromConfig(config) {
+
+  function normalizeConfigStructure(config) {
+    let cfg = config;
+    if (!cfg || typeof cfg !== 'object') {
+      cfg = JSON.parse(JSON.stringify(defaultStorage));
+    }
+
+    if (!cfg.defaultConfig || typeof cfg.defaultConfig !== 'object') {
+      cfg.defaultConfig = JSON.parse(JSON.stringify(defaultConfig));
+    }
+
+    if (!Array.isArray(cfg.defaultConfig.ageBands)) {
+      cfg.defaultConfig.ageBands = defaultConfig.ageBands.map((b) => ({ ...b }));
+    }
+
+    if (
+      typeof cfg.defaultConfig.updateThresholdDays !== 'number' ||
+      cfg.defaultConfig.updateThresholdDays < 0
+    ) {
+      cfg.defaultConfig.updateThresholdDays = DEFAULT_UPDATE_THRESHOLD_DAYS;
+    }
+
+    if (
+      !cfg.defaultConfig.updateIndicator ||
+      typeof cfg.defaultConfig.updateIndicator !== 'object'
+    ) {
+      cfg.defaultConfig.updateIndicator = { ...DEFAULT_UPDATE_INDICATOR };
+    } else {
+      cfg.defaultConfig.updateIndicator = normalizeIndicator(
+        cfg.defaultConfig.updateIndicator,
+        DEFAULT_UPDATE_INDICATOR
+      );
+    }
+
+    if (!cfg.boards || typeof cfg.boards !== 'object') {
+      cfg.boards = {};
+    }
+
+    Object.keys(cfg.boards).forEach((boardId) => {
+      let boardCfg = cfg.boards[boardId];
+      if (!boardCfg || typeof boardCfg !== 'object') {
+        cfg.boards[boardId] = { name: typeof boardCfg === 'string' ? boardCfg : boardId };
+        boardCfg = cfg.boards[boardId];
+      } else if (!boardCfg.name) {
+        boardCfg.name = boardId;
+      }
+      boardCfg.updateIndicator = normalizeIndicator(
+        boardCfg.updateIndicator,
+        cfg.defaultConfig.updateIndicator
+      );
+    });
+
+    return cfg;
+  }
+
+  function normalizeIndicator(source, fallback) {
+    const base = fallback || DEFAULT_UPDATE_INDICATOR;
+    if (!source || typeof source !== 'object') {
+      return { ...base };
+    }
+    const fresh =
+      typeof source.freshEmoji === 'string' && source.freshEmoji.trim()
+        ? source.freshEmoji
+        : base.freshEmoji;
+    const stale =
+      typeof source.staleEmoji === 'string' && source.staleEmoji.trim()
+        ? source.staleEmoji
+        : base.staleEmoji;
+    return { freshEmoji: fresh, staleEmoji: stale };
+  }
+
+  // Render the table and threshold inputs based directly on a provided configuration object.
+  function renderConfigToUI(config) {
+    const thresholdValue =
+      typeof config.updateThresholdDays === 'number' && config.updateThresholdDays >= 0
+        ? config.updateThresholdDays
+        : defaultConfig.updateThresholdDays;
+    thresholdInput.value = thresholdValue;
+
+    const indicator = normalizeIndicator(config.updateIndicator, defaultConfig.updateIndicator);
+    freshEmojiInput.value = indicator.freshEmoji;
+    staleEmojiInput.value = indicator.staleEmoji;
+
     tableBody.innerHTML = '';
     config.ageBands.forEach((band) => {
       const row = createRow(band);
@@ -137,6 +228,20 @@ document.addEventListener('DOMContentLoaded', function () {
     return newBands;
   }
 
+  function getThresholdFromInput() {
+    let value = parseFloat(thresholdInput.value);
+    if (isNaN(value) || value < 0) {
+      value = defaultConfig.updateThresholdDays;
+    }
+    return value;
+  }
+
+  function getIndicatorFromInputs() {
+    const fresh = freshEmojiInput.value.trim() || defaultConfig.updateIndicator.freshEmoji;
+    const stale = staleEmojiInput.value.trim() || defaultConfig.updateIndicator.staleEmoji;
+    return { freshEmoji: fresh, staleEmoji: stale };
+  }
+
   function populateBoardSelect() {
     boardSelect.innerHTML = '';
     const defaultOption = document.createElement('option');
@@ -155,14 +260,33 @@ document.addEventListener('DOMContentLoaded', function () {
   function getCurrentConfig() {
     if (!currentBoardId) return fullConfig.defaultConfig;
     const board = fullConfig.boards[currentBoardId];
-    if (board && board.ageBands) return board;
-    // return copy of default bands
-    return { ageBands: fullConfig.defaultConfig.ageBands.map((b) => ({ ...b })) };
+    if (board) {
+      const ageBands = board.ageBands
+        ? board.ageBands.map((b) => ({ ...b }))
+        : fullConfig.defaultConfig.ageBands.map((b) => ({ ...b }));
+      const threshold =
+        typeof board.updateThresholdDays === 'number' && board.updateThresholdDays >= 0
+          ? board.updateThresholdDays
+          : fullConfig.defaultConfig.updateThresholdDays;
+      return {
+        ageBands,
+        updateThresholdDays: threshold,
+        updateIndicator: normalizeIndicator(
+          board.updateIndicator,
+          fullConfig.defaultConfig.updateIndicator
+        ),
+      };
+    }
+    return {
+      ageBands: fullConfig.defaultConfig.ageBands.map((b) => ({ ...b })),
+      updateThresholdDays: fullConfig.defaultConfig.updateThresholdDays,
+      updateIndicator: { ...fullConfig.defaultConfig.updateIndicator },
+    };
   }
 
   boardSelect.addEventListener('change', () => {
     currentBoardId = boardSelect.value || null;
-    renderTableFromConfig(getCurrentConfig());
+    renderConfigToUI(getCurrentConfig());
   });
 
   document.getElementById('addRowBtn').addEventListener('click', () => {
@@ -179,6 +303,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
   document.getElementById('saveBtn').addEventListener('click', () => {
     const newBands = getBandsFromTable();
+    const thresholdValue = getThresholdFromInput();
+    const indicatorValue = getIndicatorFromInputs();
     if (currentBoardId) {
       if (!fullConfig.boards[currentBoardId]) {
         fullConfig.boards[currentBoardId] = {
@@ -186,8 +312,12 @@ document.addEventListener('DOMContentLoaded', function () {
         };
       }
       fullConfig.boards[currentBoardId].ageBands = newBands;
+      fullConfig.boards[currentBoardId].updateThresholdDays = thresholdValue;
+      fullConfig.boards[currentBoardId].updateIndicator = indicatorValue;
     } else {
       fullConfig.defaultConfig.ageBands = newBands;
+      fullConfig.defaultConfig.updateThresholdDays = thresholdValue;
+      fullConfig.defaultConfig.updateIndicator = indicatorValue;
     }
     saveConfig(fullConfig, function () {
       statusDiv.textContent = 'Configuration saved.';
@@ -201,11 +331,15 @@ document.addEventListener('DOMContentLoaded', function () {
     if (currentBoardId) {
       if (fullConfig.boards[currentBoardId]) {
         delete fullConfig.boards[currentBoardId].ageBands;
+        delete fullConfig.boards[currentBoardId].updateThresholdDays;
+        delete fullConfig.boards[currentBoardId].updateIndicator;
       }
     } else {
       fullConfig.defaultConfig.ageBands = defaultConfig.ageBands.map((b) => ({ ...b }));
+      fullConfig.defaultConfig.updateThresholdDays = defaultConfig.updateThresholdDays;
+      fullConfig.defaultConfig.updateIndicator = { ...defaultConfig.updateIndicator };
     }
-    renderTableFromConfig(getCurrentConfig());
+    renderConfigToUI(getCurrentConfig());
     saveConfig(fullConfig, function () {
       statusDiv.textContent = 'Configuration reset to default.';
       setTimeout(() => {
@@ -217,7 +351,6 @@ document.addEventListener('DOMContentLoaded', function () {
   loadConfig(function (config) {
     fullConfig = config;
     populateBoardSelect();
-    renderTableFromConfig(getCurrentConfig());
+    renderConfigToUI(getCurrentConfig());
   });
 });
-  

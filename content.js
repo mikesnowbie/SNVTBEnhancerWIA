@@ -10,6 +10,12 @@
 (function () {
   if (!window.location.href.includes('vtb.do')) return;
 
+  const DEFAULT_UPDATE_THRESHOLD_DAYS = 6;
+  const DEFAULT_UPDATE_INDICATOR = {
+    freshEmoji: '✅',
+    staleEmoji: '❌',
+  };
+
   const defaultConfig = {
     ageBands: [
       { maxDays: 7, color: '#f9e79f' },
@@ -17,6 +23,8 @@
       { maxDays: 90, color: '#e67e22' },
       { maxDays: 9999, color: '#d9534f' },
     ],
+    updateThresholdDays: DEFAULT_UPDATE_THRESHOLD_DAYS,
+    updateIndicator: { ...DEFAULT_UPDATE_INDICATOR },
   };
 
   const defaultStorage = { defaultConfig: defaultConfig, boards: {} };
@@ -37,6 +45,62 @@
           if (cfg && cfg.ageBands) {
             cfg = { defaultConfig: cfg, boards: {} };
           }
+
+          if (
+            typeof cfg.defaultConfig.updateThresholdDays !== 'number' ||
+            cfg.defaultConfig.updateThresholdDays < 0
+          ) {
+            cfg.defaultConfig.updateThresholdDays = DEFAULT_UPDATE_THRESHOLD_DAYS;
+          }
+
+          if (
+            !cfg.defaultConfig.updateIndicator ||
+            typeof cfg.defaultConfig.updateIndicator !== 'object'
+          ) {
+            cfg.defaultConfig.updateIndicator = { ...DEFAULT_UPDATE_INDICATOR };
+          } else {
+            cfg.defaultConfig.updateIndicator = {
+              freshEmoji:
+                typeof cfg.defaultConfig.updateIndicator.freshEmoji === 'string' &&
+                cfg.defaultConfig.updateIndicator.freshEmoji.trim()
+                  ? cfg.defaultConfig.updateIndicator.freshEmoji
+                  : DEFAULT_UPDATE_INDICATOR.freshEmoji,
+              staleEmoji:
+                typeof cfg.defaultConfig.updateIndicator.staleEmoji === 'string' &&
+                cfg.defaultConfig.updateIndicator.staleEmoji.trim()
+                  ? cfg.defaultConfig.updateIndicator.staleEmoji
+                  : DEFAULT_UPDATE_INDICATOR.staleEmoji,
+            };
+          }
+
+          if (!cfg.boards || typeof cfg.boards !== 'object') {
+            cfg.boards = {};
+          }
+
+          Object.keys(cfg.boards).forEach((key) => {
+            const boardCfg = cfg.boards[key];
+            if (!boardCfg || typeof boardCfg !== 'object') return;
+            if (typeof boardCfg.updateThresholdDays !== 'number') {
+              boardCfg.updateThresholdDays = cfg.defaultConfig.updateThresholdDays;
+            }
+
+            if (!boardCfg.updateIndicator || typeof boardCfg.updateIndicator !== 'object') {
+              boardCfg.updateIndicator = { ...cfg.defaultConfig.updateIndicator };
+            } else {
+              boardCfg.updateIndicator = {
+                freshEmoji:
+                  typeof boardCfg.updateIndicator.freshEmoji === 'string' &&
+                  boardCfg.updateIndicator.freshEmoji.trim()
+                    ? boardCfg.updateIndicator.freshEmoji
+                    : cfg.defaultConfig.updateIndicator.freshEmoji,
+                staleEmoji:
+                  typeof boardCfg.updateIndicator.staleEmoji === 'string' &&
+                  boardCfg.updateIndicator.staleEmoji.trim()
+                    ? boardCfg.updateIndicator.staleEmoji
+                    : cfg.defaultConfig.updateIndicator.staleEmoji,
+              };
+            }
+          });
           callback(cfg);
         }
       );
@@ -78,10 +142,35 @@
 
   // Load config then run the main logic.
   getConfig(function (fullConfig) {
-    const config =
-      boardId && fullConfig.boards[boardId] && fullConfig.boards[boardId].ageBands
-        ? fullConfig.boards[boardId]
-        : fullConfig.defaultConfig;
+    const boardConfig = boardId ? fullConfig.boards[boardId] : null;
+    const boardIndicator =
+      (boardConfig && boardConfig.updateIndicator) ||
+      fullConfig.defaultConfig.updateIndicator ||
+      DEFAULT_UPDATE_INDICATOR;
+    const normalizedIndicator = {
+      freshEmoji:
+        typeof boardIndicator.freshEmoji === 'string' &&
+        boardIndicator.freshEmoji.trim()
+          ? boardIndicator.freshEmoji
+          : DEFAULT_UPDATE_INDICATOR.freshEmoji,
+      staleEmoji:
+        typeof boardIndicator.staleEmoji === 'string' &&
+        boardIndicator.staleEmoji.trim()
+          ? boardIndicator.staleEmoji
+          : DEFAULT_UPDATE_INDICATOR.staleEmoji,
+    };
+
+    const config = {
+      ageBands:
+        boardConfig && boardConfig.ageBands
+          ? boardConfig.ageBands
+          : fullConfig.defaultConfig.ageBands,
+      updateThresholdDays:
+        boardConfig && typeof boardConfig.updateThresholdDays === 'number'
+          ? boardConfig.updateThresholdDays
+          : fullConfig.defaultConfig.updateThresholdDays || DEFAULT_UPDATE_THRESHOLD_DAYS,
+      updateIndicator: normalizedIndicator,
+    };
     // --- Utility Functions ---
     function showDebugMessage(msg) {
       const div = document.createElement('div');
@@ -101,10 +190,325 @@
       setTimeout(() => div.remove(), 3000);
     }
 
+    const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
     function calculateDaysDiff(dateStr) {
       const d = new Date(dateStr);
       if (isNaN(d)) return null;
-      return Math.floor((Date.now() - d.getTime()) / (1000 * 60 * 60 * 24));
+      return Math.floor((Date.now() - d.getTime()) / MS_PER_DAY);
+    }
+
+    function parseServiceNowDateTime(dateStr) {
+      if (!dateStr || typeof dateStr !== 'string') return null;
+      const trimmed = dateStr.trim();
+      const match = trimmed.match(
+        /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/
+      );
+      if (match) {
+        const [, year, month, day, hour, minute, second] = match.map((v, idx) =>
+          idx === 0 ? v : parseInt(v, 10)
+        );
+        const parsedDate = new Date(
+          year,
+          month - 1,
+          day,
+          hour,
+          minute,
+          second
+        );
+        if (!isNaN(parsedDate)) return parsedDate;
+      }
+
+      const isoCandidate = trimmed.replace(' ', 'T');
+      const isoDate = new Date(isoCandidate);
+      if (!isNaN(isoDate)) return isoDate;
+
+      const baseMatch = trimmed.match(
+        /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/
+      );
+      if (baseMatch) {
+        const base = new Date(baseMatch[1].replace(' ', 'T'));
+        if (!isNaN(base)) return base;
+      }
+
+      const fallback = new Date(trimmed);
+      return isNaN(fallback) ? null : fallback;
+    }
+
+    function removeExistingUpdateIndicator(timeElement) {
+      const existingIndicator = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator'
+      );
+      if (existingIndicator) existingIndicator.remove();
+
+      const existingSrText = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator-text'
+      );
+      if (existingSrText) existingSrText.remove();
+    }
+
+    function getIndicatorEmojis() {
+      const indicator = config.updateIndicator || DEFAULT_UPDATE_INDICATOR;
+      const freshEmoji =
+        indicator && typeof indicator.freshEmoji === 'string' && indicator.freshEmoji
+          ? indicator.freshEmoji
+          : DEFAULT_UPDATE_INDICATOR.freshEmoji;
+      const staleEmoji =
+        indicator && typeof indicator.staleEmoji === 'string' && indicator.staleEmoji
+          ? indicator.staleEmoji
+          : DEFAULT_UPDATE_INDICATOR.staleEmoji;
+      return { freshEmoji, staleEmoji };
+    }
+
+    function getTimestampString(timeElement) {
+      if (!timeElement) return null;
+
+      const ATTRIBUTES = [
+        'data-original-title',
+        'title',
+        'aria-label',
+        'datetime',
+      ];
+
+      const readFromElement = (el) => {
+        for (const attr of ATTRIBUTES) {
+          const value = el.getAttribute && el.getAttribute(attr);
+          if (value) return value;
+        }
+        if (el.dataset) {
+          if (el.dataset.originalTitle) return el.dataset.originalTitle;
+          if (el.dataset.timeAgo) return el.dataset.timeAgo;
+          if (el.dataset.timeago) return el.dataset.timeago;
+        }
+        return null;
+      };
+
+      let current = timeElement;
+      while (current) {
+        const value = readFromElement(current);
+        if (value) return value;
+        if (current.classList && current.classList.contains('sn-time-ago')) break;
+        current = current.parentElement;
+      }
+
+      return null;
+    }
+
+    function computeUpdateIndicatorState(timeElement) {
+      const timestampString = getTimestampString(timeElement);
+      const lastUpdated = parseServiceNowDateTime(timestampString);
+      if (!lastUpdated) return null;
+
+      let elapsedMs = Date.now() - lastUpdated.getTime();
+      if (!Number.isFinite(elapsedMs)) return null;
+      if (elapsedMs < 0) elapsedMs = 0;
+
+      const daysSinceUpdate = elapsedMs / MS_PER_DAY;
+      const threshold =
+        typeof config.updateThresholdDays === 'number'
+          ? config.updateThresholdDays
+          : DEFAULT_UPDATE_THRESHOLD_DAYS;
+      const { freshEmoji, staleEmoji } = getIndicatorEmojis();
+      const isStale = daysSinceUpdate > threshold;
+      const emoji = isStale ? staleEmoji : freshEmoji;
+      const srMessage = isStale
+        ? `Card has not been updated within the configured threshold (${staleEmoji}).`
+        : `Card updated within the configured threshold (${freshEmoji}).`;
+
+      return {
+        emoji,
+        srMessage,
+        isStale,
+        threshold,
+      };
+    }
+
+    function applyUpdateIndicator(timeElement) {
+      const state = computeUpdateIndicatorState(timeElement);
+      const existingIndicator = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator'
+      );
+      const existingSrText = timeElement.querySelector(
+        '.vtb-enhancer-update-indicator-text'
+      );
+
+      if (!state) {
+        if (existingIndicator || existingSrText) {
+          removeExistingUpdateIndicator(timeElement);
+        }
+        return;
+      }
+
+      if (
+        existingIndicator &&
+        existingIndicator.textContent === state.emoji &&
+        existingSrText &&
+        existingSrText.textContent === state.srMessage
+      ) {
+        return;
+      }
+
+      removeExistingUpdateIndicator(timeElement);
+
+      const indicatorSpan = document.createElement('span');
+      indicatorSpan.className = 'vtb-enhancer-update-indicator';
+      indicatorSpan.setAttribute('aria-hidden', 'true');
+      indicatorSpan.style.marginLeft = '4px';
+      indicatorSpan.textContent = state.emoji;
+
+      const srSpan = document.createElement('span');
+      srSpan.className = 'sr-only vtb-enhancer-update-indicator-text';
+      srSpan.textContent = state.srMessage;
+
+      const visibleSpan = Array.from(timeElement.children).find(
+        (child) =>
+          child.nodeType === Node.ELEMENT_NODE &&
+          child.tagName === 'SPAN' &&
+          !child.classList.contains('sr-only') &&
+          !child.classList.contains('vtb-enhancer-update-indicator') &&
+          !child.classList.contains('vtb-enhancer-update-indicator-text')
+      );
+
+      const srOnlyReference = Array.from(timeElement.children).find(
+        (child) =>
+          child.classList &&
+          child.classList.contains('sr-only') &&
+          !child.classList.contains('vtb-enhancer-update-indicator-text')
+      );
+
+      if (visibleSpan && typeof visibleSpan.after === 'function') {
+        visibleSpan.after(indicatorSpan);
+      } else if (srOnlyReference && srOnlyReference.parentNode) {
+        srOnlyReference.parentNode.insertBefore(
+          indicatorSpan,
+          srOnlyReference
+        );
+      } else {
+        timeElement.appendChild(indicatorSpan);
+      }
+
+      if (srOnlyReference && srOnlyReference.parentNode) {
+        srOnlyReference.parentNode.insertBefore(srSpan, srOnlyReference);
+      } else {
+        indicatorSpan.after(srSpan);
+      }
+    }
+
+    function detachTimeObserver(timeElement) {
+      if (
+        timeElement &&
+        timeElement._vtbEnhancerUpdateObserver &&
+        typeof timeElement._vtbEnhancerUpdateObserver.disconnect === 'function'
+      ) {
+        timeElement._vtbEnhancerUpdateObserver.disconnect();
+        delete timeElement._vtbEnhancerUpdateObserver;
+      }
+    }
+
+    function ensureUpdateIndicator(snTimeAgoElement) {
+      if (!snTimeAgoElement) return;
+
+      const applyForTimeElement = (timeElement) => {
+        if (!timeElement) return;
+        applyUpdateIndicator(timeElement);
+
+        if (timeElement._vtbEnhancerUpdateObserver) return;
+
+        const observer = new MutationObserver(() => {
+          if (!timeElement.isConnected) {
+            observer.disconnect();
+            delete timeElement._vtbEnhancerUpdateObserver;
+            return;
+          }
+          applyUpdateIndicator(timeElement);
+        });
+
+        observer.observe(timeElement, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-original-title', 'title', 'aria-label', 'datetime'],
+        });
+
+        timeElement._vtbEnhancerUpdateObserver = observer;
+      };
+
+      const trackTimeElement = () => {
+        const timeElement =
+          snTimeAgoElement.querySelector('time[data-original-title]') ||
+          snTimeAgoElement.querySelector('time[title]') ||
+          snTimeAgoElement.querySelector('time');
+
+        if (!timeElement) {
+          if (snTimeAgoElement._vtbEnhancerTrackedTime) {
+            detachTimeObserver(snTimeAgoElement._vtbEnhancerTrackedTime);
+            delete snTimeAgoElement._vtbEnhancerTrackedTime;
+          }
+          return;
+        }
+
+        if (snTimeAgoElement._vtbEnhancerTrackedTime === timeElement) {
+          applyUpdateIndicator(timeElement);
+          return;
+        }
+
+        detachTimeObserver(snTimeAgoElement._vtbEnhancerTrackedTime);
+        snTimeAgoElement._vtbEnhancerTrackedTime = timeElement;
+        applyForTimeElement(timeElement);
+      };
+
+      trackTimeElement();
+
+      if (snTimeAgoElement._vtbEnhancerContainerObserver) return;
+
+      const containerObserver = new MutationObserver((mutations) => {
+        if (!snTimeAgoElement.isConnected) {
+          detachTimeObserver(snTimeAgoElement._vtbEnhancerTrackedTime);
+          containerObserver.disconnect();
+          delete snTimeAgoElement._vtbEnhancerTrackedTime;
+          delete snTimeAgoElement._vtbEnhancerContainerObserver;
+          return;
+        }
+
+        let shouldRetrack = false;
+        for (const mutation of mutations) {
+          if (mutation.type === 'childList' || mutation.type === 'attributes') {
+            shouldRetrack = true;
+            break;
+          }
+        }
+
+        if (shouldRetrack) {
+          trackTimeElement();
+        }
+      });
+
+      containerObserver.observe(snTimeAgoElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-original-title', 'title', 'aria-label'],
+      });
+
+      snTimeAgoElement._vtbEnhancerContainerObserver = containerObserver;
+    }
+
+    function scanForTimeAgo(root = document) {
+      if (!root || !root.querySelectorAll) return;
+      root.querySelectorAll('sn-time-ago').forEach(ensureUpdateIndicator);
+    }
+
+    function annotateLastUpdated(card) {
+      let timeAgoElement = card.querySelector(
+        'sn-time-ago[timestamp="sysUpdatedOn"]'
+      );
+      if (!timeAgoElement) {
+        timeAgoElement = card.querySelector('sn-time-ago');
+      }
+      if (!timeAgoElement) return;
+
+      ensureUpdateIndicator(timeAgoElement);
     }
 
     function normalizeDateLabel(text) {
@@ -233,6 +637,7 @@
     function processCard(card) {
       if (card.hasAttribute('data-task-age-enhanced')) return;
       try {
+        annotateLastUpdated(card);
         const state = findState(card);
         if (state) {
           if (isCompletionState(state)) {
@@ -268,8 +673,8 @@
 
     function processExistingCards() {
       const cards = document.querySelectorAll('.vtb-card-component-wrapper');
-      if (!cards.length) return;
       cards.forEach((card) => processCard(card));
+      scanForTimeAgo();
     }
 
     function observeCards() {
@@ -277,6 +682,10 @@
         mutations.forEach((mutation) => {
           mutation.addedNodes.forEach((node) => {
             if (node.nodeType === Node.ELEMENT_NODE) {
+              if (node.matches && node.matches('sn-time-ago')) {
+                ensureUpdateIndicator(node);
+              }
+              node.querySelectorAll?.('sn-time-ago').forEach(ensureUpdateIndicator);
               if (node.classList.contains('vtb-card-component-wrapper'))
                 processCard(node);
               node
