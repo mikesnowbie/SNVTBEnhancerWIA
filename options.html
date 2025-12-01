@@ -46,6 +46,13 @@
       border: 1px solid #ccc;
       border-radius: 4px;
     }
+    input[type="text"] {
+      width: 100%;
+      padding: 8px;
+      box-sizing: border-box;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
     /* Style the color picker so the chosen color is clearly visible */
     input[type="color"] {
       width: 50px;
@@ -81,6 +88,19 @@
       cursor: pointer;
       font-size: 16px;
     }
+    .field-group {
+      margin-bottom: 20px;
+    }
+    .field-group label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: 500;
+    }
+    .field-help {
+      font-size: 12px;
+      color: #666;
+      margin-top: 4px;
+    }
   </style>
 </head>
 <body>
@@ -88,9 +108,28 @@
     <h1>ServiceNow Visual Task Board Enhancer</h1>
     <h1>Work Item Age Options</h1>
     <p>Configure the Work Item Age bands below. For each row, enter the maximum number of days and select the badge color. This will be the Work Item Age badge color for items less than this number of days. The last band (∞) represents no limit and only the color can be edited.</p>
-    <div style="margin-bottom:20px;">
+    <div class="field-group">
       <label for="boardSelect">Board:</label>
       <select id="boardSelect"></select>
+    </div>
+    <div class="field-group">
+      <label for="thresholdInput">Update threshold (days):</label>
+      <input type="number" id="thresholdInput" min="0" step="0.1">
+      <p class="field-help">Cards updated within this many days display the "fresh" emoji. Older cards show the "stale" emoji.</p>
+    </div>
+    <div class="field-group">
+      <label>Update status emoji:</label>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start;">
+        <div style="flex:1; min-width:120px;">
+          <label for="freshEmojiInput" style="font-weight:400;">Fresh (within threshold)</label>
+          <input type="text" id="freshEmojiInput" maxlength="8">
+        </div>
+        <div style="flex:1; min-width:120px;">
+          <label for="staleEmojiInput" style="font-weight:400;">Stale (over threshold)</label>
+          <input type="text" id="staleEmojiInput" maxlength="8">
+        </div>
+      </div>
+      <p class="field-help">Choose the emoji shown after the “time ago” text. Leave blank to fall back to the default ✅ / ❌ icons.</p>
     </div>
     <table id="ageBandsTable">
       <thead>
