@@ -246,9 +246,28 @@
       return { freshEmoji, staleEmoji };
     }
 
+    function getTimestampString(timeElement) {
+      if (!timeElement) return null;
+      const direct =
+        timeElement.getAttribute('data-original-title') ||
+        timeElement.getAttribute('title') ||
+        (timeElement.dataset ? timeElement.dataset.originalTitle : null);
+
+      if (direct) return direct;
+
+      const parent = timeElement.parentElement;
+      if (!parent) return null;
+
+      return (
+        parent.getAttribute('data-original-title') ||
+        parent.getAttribute('title') ||
+        (parent.dataset ? parent.dataset.originalTitle : null)
+      );
+    }
+
     function computeUpdateIndicatorState(timeElement) {
-      const originalTitle = timeElement.getAttribute('data-original-title');
-      const lastUpdated = parseServiceNowDateTime(originalTitle);
+      const timestampString = getTimestampString(timeElement);
+      const lastUpdated = parseServiceNowDateTime(timestampString);
       if (!lastUpdated) return null;
 
       let elapsedMs = Date.now() - lastUpdated.getTime();
@@ -380,16 +399,17 @@
           characterData: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ['data-original-title'],
+          attributeFilter: ['data-original-title', 'title'],
         });
 
         timeElement._vtbEnhancerUpdateObserver = observer;
       };
 
       const trackTimeElement = () => {
-        const timeElement = snTimeAgoElement.querySelector(
-          'time[data-original-title]'
-        );
+        const timeElement =
+          snTimeAgoElement.querySelector('time[data-original-title]') ||
+          snTimeAgoElement.querySelector('time[title]') ||
+          snTimeAgoElement.querySelector('time');
 
         if (!timeElement) {
           if (snTimeAgoElement._vtbEnhancerTrackedTime) {
@@ -441,6 +461,11 @@
       });
 
       snTimeAgoElement._vtbEnhancerContainerObserver = containerObserver;
+    }
+
+    function scanForTimeAgo(root = document) {
+      if (!root || !root.querySelectorAll) return;
+      root.querySelectorAll('sn-time-ago').forEach(ensureUpdateIndicator);
     }
 
     function annotateLastUpdated(card) {
@@ -617,8 +642,8 @@
 
     function processExistingCards() {
       const cards = document.querySelectorAll('.vtb-card-component-wrapper');
-      if (!cards.length) return;
       cards.forEach((card) => processCard(card));
+      scanForTimeAgo();
     }
 
     function observeCards() {
@@ -626,6 +651,10 @@
         mutations.forEach((mutation) => {
           mutation.addedNodes.forEach((node) => {
             if (node.nodeType === Node.ELEMENT_NODE) {
+              if (node.matches && node.matches('sn-time-ago')) {
+                ensureUpdateIndicator(node);
+              }
+              node.querySelectorAll?.('sn-time-ago').forEach(ensureUpdateIndicator);
               if (node.classList.contains('vtb-card-component-wrapper'))
                 processCard(node);
               node
