@@ -5,7 +5,9 @@ document.addEventListener('DOMContentLoaded', function () {
     staleEmoji: '❌',
   };
 
-  const defaultConfig = {
+  const BASE_DEFAULT_CONFIG = {
+    enableAgeBadge: true,
+    enableUpdateIndicator: true,
     ageBands: [
       { maxDays: 7, color: '#f9e79f' },
       { maxDays: 30, color: '#f0ad4e' },
@@ -16,7 +18,17 @@ document.addEventListener('DOMContentLoaded', function () {
     updateIndicator: { ...DEFAULT_UPDATE_INDICATOR },
   };
 
-  const defaultStorage = { defaultConfig: defaultConfig, boards: {} };
+  function cloneDefaultConfig() {
+    return {
+      enableAgeBadge: true,
+      enableUpdateIndicator: true,
+      ageBands: BASE_DEFAULT_CONFIG.ageBands.map((b) => ({ ...b })),
+      updateThresholdDays: BASE_DEFAULT_CONFIG.updateThresholdDays,
+      updateIndicator: { ...BASE_DEFAULT_CONFIG.updateIndicator },
+    };
+  }
+
+  const defaultStorage = { defaultConfig: cloneDefaultConfig(), boards: {} };
 
   const statusDiv = document.getElementById('status');
   const tableBody = document.querySelector('#ageBandsTable tbody');
@@ -24,6 +36,13 @@ document.addEventListener('DOMContentLoaded', function () {
   const thresholdInput = document.getElementById('thresholdInput');
   const freshEmojiInput = document.getElementById('freshEmojiInput');
   const staleEmojiInput = document.getElementById('staleEmojiInput');
+  const ageBadgeToggle = document.getElementById('ageBadgeToggle');
+  const ageBadgeSettings = document.getElementById('ageBadgeSettings');
+  const updateIndicatorToggle = document.getElementById('updateIndicatorToggle');
+  const updateIndicatorSettings = document.getElementById('updateIndicatorSettings');
+  const previewBadge = document.getElementById('previewBadge');
+  const previewFresh = document.getElementById('previewFresh');
+  const previewStale = document.getElementById('previewStale');
 
   let fullConfig = null;
   let currentBoardId = null; // null means default config
@@ -70,15 +89,15 @@ document.addEventListener('DOMContentLoaded', function () {
   function normalizeConfigStructure(config) {
     let cfg = config;
     if (!cfg || typeof cfg !== 'object') {
-      cfg = JSON.parse(JSON.stringify(defaultStorage));
+      cfg = { defaultConfig: cloneDefaultConfig(), boards: {} };
     }
 
     if (!cfg.defaultConfig || typeof cfg.defaultConfig !== 'object') {
-      cfg.defaultConfig = JSON.parse(JSON.stringify(defaultConfig));
+      cfg.defaultConfig = cloneDefaultConfig();
     }
 
     if (!Array.isArray(cfg.defaultConfig.ageBands)) {
-      cfg.defaultConfig.ageBands = defaultConfig.ageBands.map((b) => ({ ...b }));
+      cfg.defaultConfig.ageBands = BASE_DEFAULT_CONFIG.ageBands.map((b) => ({ ...b }));
     }
 
     if (
@@ -100,6 +119,15 @@ document.addEventListener('DOMContentLoaded', function () {
       );
     }
 
+    cfg.defaultConfig.enableAgeBadge =
+      typeof cfg.defaultConfig.enableAgeBadge === 'boolean'
+        ? cfg.defaultConfig.enableAgeBadge
+        : true;
+    cfg.defaultConfig.enableUpdateIndicator =
+      typeof cfg.defaultConfig.enableUpdateIndicator === 'boolean'
+        ? cfg.defaultConfig.enableUpdateIndicator
+        : true;
+
     if (!cfg.boards || typeof cfg.boards !== 'object') {
       cfg.boards = {};
     }
@@ -116,6 +144,15 @@ document.addEventListener('DOMContentLoaded', function () {
         boardCfg.updateIndicator,
         cfg.defaultConfig.updateIndicator
       );
+
+      boardCfg.enableAgeBadge =
+        typeof boardCfg.enableAgeBadge === 'boolean'
+          ? boardCfg.enableAgeBadge
+          : cfg.defaultConfig.enableAgeBadge;
+      boardCfg.enableUpdateIndicator =
+        typeof boardCfg.enableUpdateIndicator === 'boolean'
+          ? boardCfg.enableUpdateIndicator
+          : cfg.defaultConfig.enableUpdateIndicator;
     });
 
     return cfg;
@@ -137,15 +174,73 @@ document.addEventListener('DOMContentLoaded', function () {
     return { freshEmoji: fresh, staleEmoji: stale };
   }
 
+  function toggleSettingsVisibility() {
+    const showAge = ageBadgeToggle.checked;
+    const showUpdate = updateIndicatorToggle.checked;
+    ageBadgeSettings.style.display = showAge ? '' : 'none';
+    updateIndicatorSettings.style.display = showUpdate ? '' : 'none';
+    updatePreview();
+  }
+
+  function isAgeBadgeEnabled() {
+    return ageBadgeToggle.checked;
+  }
+
+  function isUpdateIndicatorEnabled() {
+    return updateIndicatorToggle.checked;
+  }
+
+  function getPreviewBandColor() {
+    const bands = getBandsFromTable();
+    if (!bands || bands.length === 0) return '#d9534f';
+    const sampleAge = 10;
+    const band = bands.find((b) => sampleAge < b.maxDays) || bands[bands.length - 1];
+    return band.color || '#d9534f';
+  }
+
+  function updatePreview() {
+    const ageOn = ageBadgeToggle.checked;
+    const updateOn = updateIndicatorToggle.checked;
+
+    if (ageOn && previewBadge) {
+      const color = getPreviewBandColor();
+      previewBadge.style.backgroundColor = color;
+      previewBadge.style.color = '#fff';
+      previewBadge.textContent = 'Age: 10 days';
+      previewBadge.style.display = '';
+    } else if (previewBadge) {
+      previewBadge.style.display = 'none';
+    }
+
+    if (updateOn && previewFresh && previewStale) {
+      const threshold = getThresholdFromInput();
+      const fresh = freshEmojiInput.value.trim() || BASE_DEFAULT_CONFIG.updateIndicator.freshEmoji;
+      const stale = staleEmojiInput.value.trim() || BASE_DEFAULT_CONFIG.updateIndicator.staleEmoji;
+      const freshDays = Math.max(0, Math.round(threshold - 1));
+      const staleDays = Math.max(0, Math.round(threshold + 1));
+      previewFresh.textContent = `${freshDays}d ago ${fresh}`;
+      previewStale.textContent = `${staleDays}d ago ${stale}`;
+      previewFresh.parentElement.parentElement.style.display = '';
+    } else if (previewFresh && previewFresh.parentElement) {
+      previewFresh.parentElement.parentElement.style.display = 'none';
+    }
+  }
+
   // Render the table and threshold inputs based directly on a provided configuration object.
   function renderConfigToUI(config) {
+    const ageOn = config.enableAgeBadge !== false;
+    const updateOn = config.enableUpdateIndicator !== false;
+    ageBadgeToggle.checked = ageOn;
+    updateIndicatorToggle.checked = updateOn;
+    toggleSettingsVisibility();
+
     const thresholdValue =
       typeof config.updateThresholdDays === 'number' && config.updateThresholdDays >= 0
         ? config.updateThresholdDays
-        : defaultConfig.updateThresholdDays;
+        : BASE_DEFAULT_CONFIG.updateThresholdDays;
     thresholdInput.value = thresholdValue;
 
-    const indicator = normalizeIndicator(config.updateIndicator, defaultConfig.updateIndicator);
+    const indicator = normalizeIndicator(config.updateIndicator, BASE_DEFAULT_CONFIG.updateIndicator);
     freshEmojiInput.value = indicator.freshEmoji;
     staleEmojiInput.value = indicator.staleEmoji;
 
@@ -167,6 +262,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const row = createRow(band);
       tableBody.appendChild(row);
     });
+    updatePreview();
   }
 
   function createRow(band) {
@@ -231,14 +327,14 @@ document.addEventListener('DOMContentLoaded', function () {
   function getThresholdFromInput() {
     let value = parseFloat(thresholdInput.value);
     if (isNaN(value) || value < 0) {
-      value = defaultConfig.updateThresholdDays;
+      value = BASE_DEFAULT_CONFIG.updateThresholdDays;
     }
     return value;
   }
 
   function getIndicatorFromInputs() {
-    const fresh = freshEmojiInput.value.trim() || defaultConfig.updateIndicator.freshEmoji;
-    const stale = staleEmojiInput.value.trim() || defaultConfig.updateIndicator.staleEmoji;
+    const fresh = freshEmojiInput.value.trim() || BASE_DEFAULT_CONFIG.updateIndicator.freshEmoji;
+    const stale = staleEmojiInput.value.trim() || BASE_DEFAULT_CONFIG.updateIndicator.staleEmoji;
     return { freshEmoji: fresh, staleEmoji: stale };
   }
 
@@ -269,6 +365,14 @@ document.addEventListener('DOMContentLoaded', function () {
           ? board.updateThresholdDays
           : fullConfig.defaultConfig.updateThresholdDays;
       return {
+        enableAgeBadge:
+          typeof board.enableAgeBadge === 'boolean'
+            ? board.enableAgeBadge
+            : fullConfig.defaultConfig.enableAgeBadge,
+        enableUpdateIndicator:
+          typeof board.enableUpdateIndicator === 'boolean'
+            ? board.enableUpdateIndicator
+            : fullConfig.defaultConfig.enableUpdateIndicator,
         ageBands,
         updateThresholdDays: threshold,
         updateIndicator: normalizeIndicator(
@@ -278,6 +382,8 @@ document.addEventListener('DOMContentLoaded', function () {
       };
     }
     return {
+      enableAgeBadge: fullConfig.defaultConfig.enableAgeBadge,
+      enableUpdateIndicator: fullConfig.defaultConfig.enableUpdateIndicator,
       ageBands: fullConfig.defaultConfig.ageBands.map((b) => ({ ...b })),
       updateThresholdDays: fullConfig.defaultConfig.updateThresholdDays,
       updateIndicator: { ...fullConfig.defaultConfig.updateIndicator },
@@ -289,6 +395,13 @@ document.addEventListener('DOMContentLoaded', function () {
     renderConfigToUI(getCurrentConfig());
   });
 
+  ageBadgeToggle.addEventListener('change', toggleSettingsVisibility);
+  updateIndicatorToggle.addEventListener('change', toggleSettingsVisibility);
+  thresholdInput.addEventListener('input', updatePreview);
+  freshEmojiInput.addEventListener('input', updatePreview);
+  staleEmojiInput.addEventListener('input', updatePreview);
+  tableBody.addEventListener('input', updatePreview);
+
   document.getElementById('addRowBtn').addEventListener('click', () => {
     let bands = getBandsFromTable();
     const infinityBand =
@@ -299,22 +412,29 @@ document.addEventListener('DOMContentLoaded', function () {
     bands.push(infinityBand);
     tableBody.innerHTML = '';
     bands.forEach((band) => tableBody.appendChild(createRow(band)));
+    updatePreview();
   });
 
   document.getElementById('saveBtn').addEventListener('click', () => {
     const newBands = getBandsFromTable();
     const thresholdValue = getThresholdFromInput();
     const indicatorValue = getIndicatorFromInputs();
+    const ageBadgeEnabled = ageBadgeToggle.checked;
+    const updateIndicatorEnabled = updateIndicatorToggle.checked;
     if (currentBoardId) {
       if (!fullConfig.boards[currentBoardId]) {
         fullConfig.boards[currentBoardId] = {
           name: boardSelect.options[boardSelect.selectedIndex].text,
         };
       }
+      fullConfig.boards[currentBoardId].enableAgeBadge = ageBadgeEnabled;
+      fullConfig.boards[currentBoardId].enableUpdateIndicator = updateIndicatorEnabled;
       fullConfig.boards[currentBoardId].ageBands = newBands;
       fullConfig.boards[currentBoardId].updateThresholdDays = thresholdValue;
       fullConfig.boards[currentBoardId].updateIndicator = indicatorValue;
     } else {
+      fullConfig.defaultConfig.enableAgeBadge = ageBadgeEnabled;
+      fullConfig.defaultConfig.enableUpdateIndicator = updateIndicatorEnabled;
       fullConfig.defaultConfig.ageBands = newBands;
       fullConfig.defaultConfig.updateThresholdDays = thresholdValue;
       fullConfig.defaultConfig.updateIndicator = indicatorValue;
@@ -333,11 +453,11 @@ document.addEventListener('DOMContentLoaded', function () {
         delete fullConfig.boards[currentBoardId].ageBands;
         delete fullConfig.boards[currentBoardId].updateThresholdDays;
         delete fullConfig.boards[currentBoardId].updateIndicator;
+        delete fullConfig.boards[currentBoardId].enableAgeBadge;
+        delete fullConfig.boards[currentBoardId].enableUpdateIndicator;
       }
     } else {
-      fullConfig.defaultConfig.ageBands = defaultConfig.ageBands.map((b) => ({ ...b }));
-      fullConfig.defaultConfig.updateThresholdDays = defaultConfig.updateThresholdDays;
-      fullConfig.defaultConfig.updateIndicator = { ...defaultConfig.updateIndicator };
+      fullConfig.defaultConfig = cloneDefaultConfig();
     }
     renderConfigToUI(getCurrentConfig());
     saveConfig(fullConfig, function () {
@@ -352,5 +472,6 @@ document.addEventListener('DOMContentLoaded', function () {
     fullConfig = config;
     populateBoardSelect();
     renderConfigToUI(getCurrentConfig());
+    updatePreview();
   });
 });

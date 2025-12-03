@@ -17,6 +17,8 @@
   };
 
   const defaultConfig = {
+    enableAgeBadge: true,
+    enableUpdateIndicator: true,
     ageBands: [
       { maxDays: 7, color: '#f9e79f' },
       { maxDays: 30, color: '#f0ad4e' },
@@ -73,6 +75,13 @@
             };
           }
 
+          if (typeof cfg.defaultConfig.enableAgeBadge !== 'boolean') {
+            cfg.defaultConfig.enableAgeBadge = true;
+          }
+          if (typeof cfg.defaultConfig.enableUpdateIndicator !== 'boolean') {
+            cfg.defaultConfig.enableUpdateIndicator = true;
+          }
+
           if (!cfg.boards || typeof cfg.boards !== 'object') {
             cfg.boards = {};
           }
@@ -82,6 +91,14 @@
             if (!boardCfg || typeof boardCfg !== 'object') return;
             if (typeof boardCfg.updateThresholdDays !== 'number') {
               boardCfg.updateThresholdDays = cfg.defaultConfig.updateThresholdDays;
+            }
+
+            if (typeof boardCfg.enableAgeBadge !== 'boolean') {
+              boardCfg.enableAgeBadge = cfg.defaultConfig.enableAgeBadge;
+            }
+
+            if (typeof boardCfg.enableUpdateIndicator !== 'boolean') {
+              boardCfg.enableUpdateIndicator = cfg.defaultConfig.enableUpdateIndicator;
             }
 
             if (!boardCfg.updateIndicator || typeof boardCfg.updateIndicator !== 'object') {
@@ -160,6 +177,15 @@
           : DEFAULT_UPDATE_INDICATOR.staleEmoji,
     };
 
+    const enableAgeBadge =
+      boardConfig && typeof boardConfig.enableAgeBadge === 'boolean'
+        ? boardConfig.enableAgeBadge
+        : fullConfig.defaultConfig.enableAgeBadge !== false;
+    const enableUpdateIndicator =
+      boardConfig && typeof boardConfig.enableUpdateIndicator === 'boolean'
+        ? boardConfig.enableUpdateIndicator
+        : fullConfig.defaultConfig.enableUpdateIndicator !== false;
+
     const config = {
       ageBands:
         boardConfig && boardConfig.ageBands
@@ -170,6 +196,8 @@
           ? boardConfig.updateThresholdDays
           : fullConfig.defaultConfig.updateThresholdDays || DEFAULT_UPDATE_THRESHOLD_DAYS,
       updateIndicator: normalizedIndicator,
+      enableAgeBadge,
+      enableUpdateIndicator,
     };
     // --- Utility Functions ---
     function showDebugMessage(msg) {
@@ -495,11 +523,13 @@
     }
 
     function scanForTimeAgo(root = document) {
+      if (!config.enableUpdateIndicator) return;
       if (!root || !root.querySelectorAll) return;
       root.querySelectorAll('sn-time-ago').forEach(ensureUpdateIndicator);
     }
 
     function annotateLastUpdated(card) {
+      if (!config.enableUpdateIndicator) return;
       let timeAgoElement = card.querySelector(
         'sn-time-ago[timestamp="sysUpdatedOn"]'
       );
@@ -638,6 +668,7 @@
       if (card.hasAttribute('data-task-age-enhanced')) return;
       try {
         annotateLastUpdated(card);
+        if (!config.enableAgeBadge) return;
         const state = findState(card);
         if (state) {
           if (isCompletionState(state)) {
@@ -672,20 +703,26 @@
     }
 
     function processExistingCards() {
+      if (!config.enableAgeBadge && !config.enableUpdateIndicator) return;
       const cards = document.querySelectorAll('.vtb-card-component-wrapper');
       cards.forEach((card) => processCard(card));
-      scanForTimeAgo();
+      if (config.enableUpdateIndicator) {
+        scanForTimeAgo();
+      }
     }
 
     function observeCards() {
+      if (!config.enableAgeBadge && !config.enableUpdateIndicator) return;
       const observer = new MutationObserver((mutations) => {
         mutations.forEach((mutation) => {
           mutation.addedNodes.forEach((node) => {
             if (node.nodeType === Node.ELEMENT_NODE) {
-              if (node.matches && node.matches('sn-time-ago')) {
+              if (config.enableUpdateIndicator && node.matches && node.matches('sn-time-ago')) {
                 ensureUpdateIndicator(node);
               }
-              node.querySelectorAll?.('sn-time-ago').forEach(ensureUpdateIndicator);
+              if (config.enableUpdateIndicator) {
+                node.querySelectorAll?.('sn-time-ago').forEach(ensureUpdateIndicator);
+              }
               if (node.classList.contains('vtb-card-component-wrapper'))
                 processCard(node);
               node
@@ -727,8 +764,18 @@
     function init() {
       waitForBoardLoad(() => {
         updateBoardInfo(fullConfig);
+        if (!config.enableAgeBadge && !config.enableUpdateIndicator) {
+          showDebugMessage('VTB Enhancer disabled for this board (all toggles off)');
+          return;
+        }
         processExistingCards();
-        showDebugMessage(`Updated ${updatedCount} cards with Work Item Age`);
+        const ageMessage = config.enableAgeBadge
+          ? `Updated ${updatedCount} cards with Work Item Age`
+          : 'Work Item Age badge disabled';
+        const indicatorMessage = config.enableUpdateIndicator
+          ? 'Freshness indicator on'
+          : 'Freshness indicator off';
+        showDebugMessage(`${ageMessage}; ${indicatorMessage}`);
         observeCards();
       });
     }

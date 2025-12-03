@@ -45,3 +45,4 @@ jobs:
             !./package-lock.json
             !./**/*screenshot*
             !./**/*.zip
+            !./AGENTS.md
